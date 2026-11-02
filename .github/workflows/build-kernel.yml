@@ -16,8 +16,10 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev bc
-
+          sudo apt-get install -y \
+            build-essential libncurses-dev bison flex libssl-dev libelf-dev bc \
+            clang lld llvm
+            
       - name: Configure Kernel
         run: |
           # 确保脚本有执行权限
