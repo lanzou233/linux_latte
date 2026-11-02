@@ -1,4 +1,4 @@
-name: Build Linux Kernel for Mi Pad 2 (via build.sh)
+name: Build Arch Linux Kernel Package (Mi Pad 2 / latte)
 
 on:
   push:
@@ -6,45 +6,101 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  compile-kernel:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install LLVM Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential libncurses-dev bison flex libssl-dev libelf-dev bc \
-            clang lld llvm
-            
+          sudo apt-get install -y build-essential libncurses-dev bison flex \
+            libssl-dev libelf-dev bc clang lld llvm
+
       - name: Configure Kernel
         run: |
-          # 确保脚本有执行权限
           chmod +x build.sh
-          # 按照 README 的说明进行配置
           ./build.sh xiaomipad2_defconfig
 
-      - name: Compile Kernel
+      - name: Compile Kernel & Modules
         run: |
-          # 执行编译，使用所有可用的CPU核心
-          # 部分 build.sh 脚本支持通过 -j 参数指定并行度，如果此处报错可尝试直接执行 ./build.sh
           ./build.sh -j$(nproc)
 
-      - name: Package Artifacts
+      - name: Install Modules to Staging Area
         run: |
-          # 关键：build.sh 的产物路径可能与标准内核不同
-          # 请根据脚本的实际输出调整。常见位置可能是 arch/x86/boot/bzImage 或项目的 output 目录
-          # 以下命令会打包整个 arch/x86/boot 目录和 System.map 作为初始方案
-          tar -czvf kernel-artifacts.tar.gz \
-            arch/x86/boot/ \
-            System.map \
-            .config 2>/dev/null || true
+          make O=out ARCH=x86 LLVM=1 modules_install INSTALL_MOD_PATH=out/_arch_pkg_modules
 
-      - name: Upload Artifacts
+      - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-latte-x86_64-kernel
-          path: kernel-artifacts.tar.gz
+          name: kernel-build-output
+          path: |
+            out/arch/x86/boot/bzImage
+            out/_arch_pkg_modules/
+            out/System.map
+            out/.config
+
+  package-arch:
+    needs: compile-kernel
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Download Kernel Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-build-output
+          path: kernel-output
+
+      - name: Setup Arch Build Environment
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git sudo
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder .
+
+      - name: Prepare PKGBUILD
+        run: |
+          mkdir -p arch-pkg
+          cat > arch-pkg/PKGBUILD << 'PKGBUILD_EOF'
+          pkgname=linux-latte
+          pkgver=7.2
+          pkgrel=1
+          pkgdesc="Custom Linux kernel for Xiaomi Mi Pad 2 (latte)"
+          arch=('x86_64')
+          url="https://github.com/lanzou233/linux_latte"
+          license=('GPL-2.0-only')
+          depends=('coreutils' 'kmod')
+          options=('!strip')
+
+          package() {
+              install -Dm644 "$startdir/../kernel-output/out/arch/x86/boot/bzImage" \
+                  "$pkgdir/boot/vmlinuz-linux-latte"
+
+              install -Dm644 "$startdir/../kernel-output/out/System.map" \
+                  "$pkgdir/boot/System.map-linux-latte"
+              install -Dm644 "$startdir/../kernel-output/out/.config" \
+                  "$pkgdir/boot/config-linux-latte"
+
+              local moddir="$startdir/../kernel-output/out/_arch_pkg_modules/lib/modules"
+              if [ -d "$moddir" ]; then
+                  cp -a "$moddir"/* "$pkgdir/usr/lib/modules/"
+              else
+                  echo "Warning: modules directory not found"
+              fi
+          }
+          PKGBUILD_EOF
+          chown -R builder:builder arch-pkg
+
+      - name: Build Arch Package
+        run: |
+          cd arch-pkg
+          su builder -c "makepkg -s --noconfirm"
+
+      - name: Upload Arch Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: archlinux-kernel-package
+          path: arch-pkg/*.pkg.tar.zst
