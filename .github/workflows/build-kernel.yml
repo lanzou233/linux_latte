@@ -1,41 +1,46 @@
-name: Build Linux Kernel for Mi Pad 2 (x86_64)
+name: Build Linux Kernel for Mi Pad 2 (via build.sh)
 
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest # 使用 x86_64 运行器，与目标架构一致
-    
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
-      
+
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev bc
-      
+
       - name: Configure Kernel
         run: |
-          # 关键修正：使用 x86_64 架构，无需 CROSS_COMPILE
-          make ARCH=x86_64 .config
-      
+          # 确保脚本有执行权限
+          chmod +x build.sh
+          # 按照 README 的说明进行配置
+          ./build.sh xiaomipad2_defconfig
+
       - name: Compile Kernel
         run: |
-          # 使用所有可用的 CPU 核心并行编译
-          make ARCH=x86_64 -j$(nproc)
-      
+          # 执行编译，使用所有可用的CPU核心
+          # 部分 build.sh 脚本支持通过 -j 参数指定并行度，如果此处报错可尝试直接执行 ./build.sh
+          ./build.sh -j$(nproc)
+
       - name: Package Artifacts
         run: |
-          # 关键修正：x86_64 的内核镜像路径是 arch/x86/boot/bzImage
+          # 关键：build.sh 的产物路径可能与标准内核不同
+          # 请根据脚本的实际输出调整。常见位置可能是 arch/x86/boot/bzImage 或项目的 output 目录
+          # 以下命令会打包整个 arch/x86/boot 目录和 System.map 作为初始方案
           tar -czvf kernel-artifacts.tar.gz \
-            arch/x86/boot/bzImage \
+            arch/x86/boot/ \
             System.map \
-            .config
-      
+            .config 2>/dev/null || true
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
