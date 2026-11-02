@@ -1,0 +1,43 @@
+name: Build Linux Kernel for Mi Pad 2 (x86_64)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # 使用 x86_64 运行器，与目标架构一致
+    
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+      
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev bc
+      
+      - name: Configure Kernel
+        run: |
+          # 关键修正：使用 x86_64 架构，无需 CROSS_COMPILE
+          make ARCH=x86_64 .config
+      
+      - name: Compile Kernel
+        run: |
+          # 使用所有可用的 CPU 核心并行编译
+          make ARCH=x86_64 -j$(nproc)
+      
+      - name: Package Artifacts
+        run: |
+          # 关键修正：x86_64 的内核镜像路径是 arch/x86/boot/bzImage
+          tar -czvf kernel-artifacts.tar.gz \
+            arch/x86/boot/bzImage \
+            System.map \
+            .config
+      
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-latte-x86_64-kernel
+          path: kernel-artifacts.tar.gz
