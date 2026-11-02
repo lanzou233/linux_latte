@@ -1,4 +1,4 @@
-name: Build Arch Linux Kernel Package (Mi Pad 2 / latte)
+name: Build Debian Kernel Package (Mi Pad 2 / latte)
 
 on:
   push:
@@ -6,101 +6,41 @@ on:
   workflow_dispatch:
 
 jobs:
-  compile-kernel:
+  build-deb:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install LLVM Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev bison flex \
-            libssl-dev libelf-dev bc clang lld llvm
+          sudo apt-get install -y \
+            build-essential libncurses-dev bison flex \
+            libssl-dev libelf-dev bc clang lld llvm \
+            dpkg-dev debhelper fakeroot
 
       - name: Configure Kernel
         run: |
           chmod +x build.sh
           ./build.sh xiaomipad2_defconfig
 
-      - name: Compile Kernel & Modules
+      - name: Build Debian Package
         run: |
-          ./build.sh -j$(nproc)
+          ./build.sh deb-pkg -j$(nproc)
 
-      - name: Install Modules to Staging Area
+      - name: Locate and Upload DEB Packages
         run: |
-          make O=out ARCH=x86 LLVM=1 modules_install INSTALL_MOD_PATH=out/_arch_pkg_modules
+          echo "=== Searching for .deb files ==="
+          find . .. -maxdepth 3 -name "*.deb" -type f 2>/dev/null || true
+          mkdir -p deb-output
+          # deb-pkg 通常把包放在源码根目录的上一级，这里兜底搜索
+          find . .. -maxdepth 3 -name "*.deb" -type f -exec cp {} deb-output/ \; 2>/dev/null || true
+          ls -lh deb-output/
 
-      - name: Upload Kernel Artifacts
+      - name: Upload DEB Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-build-output
-          path: |
-            out/arch/x86/boot/bzImage
-            out/_arch_pkg_modules/
-            out/System.map
-            out/.config
-
-  package-arch:
-    needs: compile-kernel
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
-    steps:
-      - name: Download Kernel Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: kernel-build-output
-          path: kernel-output
-
-      - name: Setup Arch Build Environment
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git sudo
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          chown -R builder:builder .
-
-      - name: Prepare PKGBUILD
-        run: |
-          mkdir -p arch-pkg
-          cat > arch-pkg/PKGBUILD << 'PKGBUILD_EOF'
-          pkgname=linux-latte
-          pkgver=7.2
-          pkgrel=1
-          pkgdesc="Custom Linux kernel for Xiaomi Mi Pad 2 (latte)"
-          arch=('x86_64')
-          url="https://github.com/lanzou233/linux_latte"
-          license=('GPL-2.0-only')
-          depends=('coreutils' 'kmod')
-          options=('!strip')
-
-          package() {
-              install -Dm644 "$startdir/../kernel-output/out/arch/x86/boot/bzImage" \
-                  "$pkgdir/boot/vmlinuz-linux-latte"
-
-              install -Dm644 "$startdir/../kernel-output/out/System.map" \
-                  "$pkgdir/boot/System.map-linux-latte"
-              install -Dm644 "$startdir/../kernel-output/out/.config" \
-                  "$pkgdir/boot/config-linux-latte"
-
-              local moddir="$startdir/../kernel-output/out/_arch_pkg_modules/lib/modules"
-              if [ -d "$moddir" ]; then
-                  cp -a "$moddir"/* "$pkgdir/usr/lib/modules/"
-              else
-                  echo "Warning: modules directory not found"
-              fi
-          }
-          PKGBUILD_EOF
-          chown -R builder:builder arch-pkg
-
-      - name: Build Arch Package
-        run: |
-          cd arch-pkg
-          su builder -c "makepkg -s --noconfirm"
-
-      - name: Upload Arch Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: archlinux-kernel-package
-          path: arch-pkg/*.pkg.tar.zst
+          name: linux-latte-deb-packages
+          path: deb-output/*.deb
+          if-no-files-found: warn
